@@ -1,0 +1,27 @@
+name: env_215a
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.10
+  - cudatoolkit=11.8
+  - pytorch=2.1.0
+  - torchvision=0.16.0
+  - torchaudio=2.1.0
+  - conda-forge::numpy<2
+  - conda-forge::pandas
+  - conda-forge::matplotlib
+  - conda-forge::seaborn
+  - conda-forge::scikit-learn
+  - conda-forge::jupyterlab
+  - conda-forge::pyyaml
+  - pip
+  - pip:
+      - lightning==2.1.0
+      - wandb
+      - transformers==4.38.2
+      - datasets==2.17.0
+      - peft==0.8.2
