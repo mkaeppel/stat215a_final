@@ -1,166 +1,166 @@
-import torch
-import torch.nn as nn
+from peft import LoraConfig, get_peft_model, TaskType
 from torch.optim import AdamW
+from transformers import get_linear_schedule_with_warmup
 from tqdm import tqdm
+import torch
 
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # --- MLM MASKING ---
-def mask_tokens(input_ids, vocab_size, mask_token_id, pad_token_id, mlm_prob=0.15):
-    '''
-    Implements Masked Language Modeling (MLM) masking strategy.
-    
-    For each token, with probability mlm_prob:
-    - 80% of the time: replace with [MASK] token
-    - 10% of the time: replace with random token
-    - 10% of the time: keep original token
-    
-    Args:
-        input_ids: torch.Tensor, shape (batch_size, seq_length)
-        vocab_size: int, size of vocabulary
-        mask_token_id: int, ID of [MASK] token
-        pad_token_id: int, ID of [PAD] token (we don't mask padding)
-        mlm_prob: float, probability of masking a token (default 0.15)
-    
-    Returns:
-        inputs: torch.Tensor, masked input_ids
-        labels: torch.Tensor, original tokens for loss calculation (-100 for non-masked)
-    '''
-    device = input_ids.device
-    # Clone input_ids to create labels (targets for prediction)
+
+def mask_tokens(input_ids: torch.Tensor, tokenizer, mlm_prob: float = 0.15):
+    """
+    Apply BERT-style MLM masking.
+    - 15% of non-special tokens selected
+      * 80% -> [MASK]
+      * 10% -> random token
+      * 10% -> keep original
+    """
     labels = input_ids.clone()
-    
-    # Create probability matrix for masking decisions
-    # Shape: (batch_size, seq_length)
-    probability_matrix = torch.full(labels.shape, mlm_prob, device=device)
-    
-    # Don't mask special tokens (padding tokens)
-    # Set their probability to 0
-    special_tokens_mask = input_ids == pad_token_id
-    special_tokens_mask = special_tokens_mask.to(device)
+
+    # Do not mask special or padding tokens
+    special_tokens_mask = (
+        input_ids.eq(tokenizer.pad_token_id) |
+        input_ids.eq(tokenizer.cls_token_id) |
+        input_ids.eq(tokenizer.sep_token_id)
+    )
+
+    probability_matrix = torch.full(labels.shape, mlm_prob, device=input_ids.device)
     probability_matrix.masked_fill_(special_tokens_mask, value=0.0)
-    
-    # Randomly select tokens to mask based on probability_matrix
     masked_indices = torch.bernoulli(probability_matrix).bool()
-    
-    # Set labels to -100 (ignored by CrossEntropyLoss) for tokens we're NOT predicting
+
+    # Only masked positions contribute to loss
     labels[~masked_indices] = -100
-    
-    # for 80% of masked tokens, replace with [MASK]
-    indices_replaced = torch.bernoulli(torch.full(labels.shape, 0.8, device=device)).bool() & masked_indices
-    input_ids[indices_replaced] = mask_token_id
-    
-    # for 10% of masked tokens, replace with random token
-    indices_random = torch.bernoulli(torch.full(labels.shape, 0.5, device=device)).bool() & masked_indices & ~indices_replaced
-    random_words = torch.randint(vocab_size, labels.shape, dtype=torch.long, device=device)
+
+    # 80% -> [MASK]
+    indices_replaced = (
+        torch.bernoulli(torch.full(labels.shape, 0.8, device=input_ids.device)).bool() &
+        masked_indices
+    )
+    input_ids[indices_replaced] = tokenizer.mask_token_id
+
+    # 10% -> random token
+    indices_random = (
+        torch.bernoulli(torch.full(labels.shape, 0.5, device=input_ids.device)).bool() &
+        masked_indices & ~indices_replaced
+    )
+    random_words = torch.randint(
+        low=0,
+        high=len(tokenizer),
+        size=labels.shape,
+        device=input_ids.device,
+        dtype=torch.long
+    )
     input_ids[indices_random] = random_words[indices_random]
-    
-    # for the remaining 10%, keep original token (i.e. do nothing)
-    
+
+    # Remaining 10%: keep original token
     return input_ids, labels
 
-def train_bert(model, dataloader, tokenizer, epochs=3, lr=5e-5, device='cuda'):
-    '''
-    Training loop for BERT with Masked Language Modeling.
-    
-    Args:
-        model: BERT model (BertForMaskedLM from transformers)
-        dataloader: DataLoader with tokenized text batches
-        tokenizer: BERT tokenizer
-        epochs: int, number of training epochs
-        lr: float, learning rate (5e-5 is standard for BERT)
-        device: str, 'cuda' or 'cpu'
-    '''
-    # Move model to device 
-    model = model.to(device)
-    model.train() 
-    
-    # Initialize optimizer 
+
+# --- LoRA wrapper ---
+
+def apply_lora_to_bert(model, r: int = 8, alpha: int = 16, dropout: float = 0.05):
+    """
+    Wrap a BertForMaskedLM with LoRA adapters using PEFT.
+    """
+    lora_config = LoraConfig(
+        task_type=TaskType.TOKEN_CLS,  # close enough for MLM token-level work
+        r=r,
+        lora_alpha=alpha,
+        lora_dropout=dropout,
+        bias="none",
+        target_modules=["query", "key", "value", "dense"],  # typical for BERT
+    )
+    lora_model = get_peft_model(model, lora_config)
+    lora_model.print_trainable_parameters()
+    return lora_model
+
+
+# --- Evaluation helper ---
+
+@torch.no_grad()
+def evaluate_mlm(model, dataloader, tokenizer, device=DEVICE):
+    model.eval()
+    total_loss = 0.0
+
+    for batch in dataloader:
+        input_ids = batch["input_ids"].to(device)
+        attention_mask = batch["attention_mask"].to(device)
+
+        masked_input_ids, labels = mask_tokens(input_ids.clone(), tokenizer)
+        masked_input_ids = masked_input_ids.to(device)
+        labels = labels.to(device)
+
+        outputs = model(
+            input_ids=masked_input_ids,
+            attention_mask=attention_mask,
+            labels=labels
+        )
+        loss = outputs.loss
+        total_loss += loss.item()
+
+    avg_loss = total_loss / len(dataloader)
+    model.train()
+    return avg_loss
+
+
+# --- Training loop ---
+
+def train_bert(
+    model,
+    train_loader,
+    tokenizer,
+    val_loader=None,
+    epochs: int = 3,
+    lr: float = 5e-5,
+    device: str = "cuda",
+):
+    model.to(device)
+    model.train()
+
     optimizer = AdamW(model.parameters(), lr=lr)
-    
-    # Get special token IDs from tokenizer
-    vocab_size = tokenizer.vocab_size
-    mask_token_id = tokenizer.mask_token_id
-    pad_token_id = tokenizer.pad_token_id
-    
-    # Training loop
+
+    num_training_steps = epochs * len(train_loader)
+    scheduler = get_linear_schedule_with_warmup(
+        optimizer,
+        num_warmup_steps=int(0.1 * num_training_steps),
+        num_training_steps=num_training_steps,
+    )
+
     for epoch in range(epochs):
-        total_loss = 0
-        progress_bar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{epochs}")
-        
-        for batch_idx, batch in enumerate(progress_bar):
-            # Get input_ids and attention_mask from batch
-            input_ids = batch['input_ids'].to(device)
-            attention_mask = batch['attention_mask'].to(device)
-            
-            # Apply MLM masking
-            masked_input_ids, labels = mask_tokens(
-                input_ids.clone(),
-                vocab_size=vocab_size,
-                mask_token_id=mask_token_id,
-                pad_token_id=pad_token_id,
-                mlm_prob=0.15
-            )
-            
-            # Move labels to device
+        total_loss = 0.0
+        progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}")
+
+        for batch in progress_bar:
+            input_ids = batch["input_ids"].to(device)
+            attention_mask = batch["attention_mask"].to(device)
+
+            # MLM masking
+            masked_input_ids, labels = mask_tokens(input_ids.clone(), tokenizer)
+            masked_input_ids = masked_input_ids.to(device)
             labels = labels.to(device)
-            
-            # Forward pass
-            # BertForMaskedLM returns loss when labels are provided
+
             outputs = model(
                 input_ids=masked_input_ids,
                 attention_mask=attention_mask,
                 labels=labels
             )
-            
             loss = outputs.loss
-            
-            # Backward pass
-            optimizer.zero_grad()  
-            loss.backward()        
-            optimizer.step()   
-            
-            # Track loss
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            scheduler.step()
+
             total_loss += loss.item()
-            
-            # Update progress bar
-            progress_bar.set_postfix({'loss': loss.item()})
-        
-        # Print epoch summary
-        avg_loss = total_loss / len(dataloader)
-        print(f"Epoch {epoch+1}/{epochs} - Average Loss: {avg_loss:.4f}")
-    
-    print("Training complete!")
+            progress_bar.set_postfix({"loss": loss.item()})
+
+        avg_loss = total_loss / len(train_loader)
+        print(f"Epoch {epoch+1} train loss: {avg_loss:.4f}")
+
+        if val_loader is not None:
+            val_loss = evaluate_mlm(model, val_loader, tokenizer, device)
+            print(f"Epoch {epoch+1} val loss: {val_loss:.4f}")
+
+    print("Training complete.")
     return model
-
-
-class TextDataset(torch.utils.data.Dataset):
-    '''
-    Simple dataset for text data.
-    Tokenizes texts and returns batches for training.
-    '''
-    def __init__(self, texts, tokenizer, max_length=128):
-        '''
-        Args:
-            texts: list of strings (your story texts)
-            tokenizer: BERT tokenizer
-            max_length: maximum sequence length
-        '''
-        print(f"Tokenizing {len(texts)} texts...")
-        self.encodings = tokenizer(
-            texts,
-            truncation=True,
-            padding='max_length',
-            max_length=max_length,
-            return_tensors='pt'
-        )
-        print(f"Tokenization complete. Shape: {self.encodings['input_ids'].shape}")
-    
-    def __len__(self):
-        return len(self.encodings['input_ids'])
-    
-    def __getitem__(self, idx):
-        return {
-            'input_ids': self.encodings['input_ids'][idx],
-            'attention_mask': self.encodings['attention_mask'][idx]
-        }
-
