@@ -88,9 +88,3 @@ def downsample_word_vectors(stories, word_vectors, wordseqs):
 			word_vectors[story], wordseqs[story].data_times, 
 			wordseqs[story].tr_times, window=3)
 	return downsampled_semanticseqs
-
-
-
-if __name__ == "__main__":
-    raw_stories = pickle.load(open('raw_stories.pkl', 'rb'))
-    
