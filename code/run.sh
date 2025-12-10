@@ -2,7 +2,7 @@
 #SBATCH --account=mth250011p
 #SBATCH --job-name=final_project_reg_finetuned_bert
 #SBATCH --cpus-per-task=5
-#SBATCH --time=04:00:00
+#SBATCH --time=06:00:00
 #SBATCH -o ../logs/reg_finetuned_bert.out
 #SBATCH -e ../logs/reg_finetuned_bert.err
 #SBATCH --partition=GPU-shared 

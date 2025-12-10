@@ -103,17 +103,20 @@ def clean_data(pklfilename):
     """
     sentences, story_ids = pkl2list(pklfilename)
     clean_story_texts = []
-    for story in sentences:
-        if isinstance(story, str):
-            clean_story_texts.append(story)
-        elif isinstance(story, list):
-            clean_story_texts.append(" ".join(story))
-        elif story is None:
-            clean_story_texts.append("")
-        else:
-            clean_story_texts.append(str(story))
-        sentences = correct_typos(sentences)
-        sentences = remove_leading_and_trailing_spaces(sentences)
-        sentences = clean_nonword(sentences)
-    return clean_story_texts, story_ids
+    # for story in sentences:
+    #     if isinstance(story, str):
+    #         clean_story_texts.append(story)
+    #     elif isinstance(story, list):
+    #         clean_story_texts.append(" ".join(story))
+    #     elif story is None:
+    #         clean_story_texts.append("")
+    #     else:
+    #         clean_story_texts.append(str(story))
+    #     sentences = correct_typos(sentences)
+    #     sentences = remove_leading_and_trailing_spaces(sentences)
+    #     sentences = clean_nonword(sentences)
+    sentences = correct_typos(sentences) # correct known typos
+    sentences = remove_leading_and_trailing_spaces(sentences) # remove leading/trailing spaces
+    sentences = clean_nonword(sentences) # remove non-words
+    return sentences, story_ids
 

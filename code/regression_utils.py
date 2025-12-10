@@ -227,6 +227,116 @@ def solve_ridge(XtX, XtY, alpha, eps=1e-8):
     print(f"[RIDGE] Done. W shape: {W.shape}")
     return W
 
+# Not used in our implementation: memory-efficient SVD ridge solver
+def solve_ridge_svd_chunked(train_files, mean_X, std_X, mean_Y, std_Y,
+                             alpha, voxel_chunk=1000):
+    """
+    Memory-efficient Huth-style SVD ridge solver.
+
+    Does a single SVD on the (train) stimulus matrix Xz, then solves ridge
+    in voxel chunks to avoid holding full Yz in RAM.
+
+    Parameters
+    ----------
+    train_files : list[Path]
+    mean_X, std_X : feature normalization stats
+    mean_Y, std_Y : voxel normalization stats
+    alpha : scalar ridge penalty
+    voxel_chunk : number of voxels to solve at a time (e.g., 500–3000)
+
+    Returns
+    -------
+    W : (D, V) ridge weights
+    """
+
+    # 1) build Xz only (stimulus matrix)
+    print("[RIDGE-SVD] Building Xz...")
+
+    # Determine total TR count T and dims
+    T = 0
+    D = len(mean_X)
+    V = len(mean_Y)
+
+    for f in train_files:
+        with open(f, "rb") as fh:
+            d = pickle.load(fh)
+        T += d["X_delayed"].shape[0]
+
+    # Allocate Xz (this is the biggest matrix we store)
+    Xz = np.zeros((T, D), dtype=np.float32)
+
+    # Fill Xz
+    offset = 0
+    for f in train_files:
+        with open(f, "rb") as fh:
+            d = pickle.load(fh)
+        X = np.nan_to_num(d["X_delayed"].astype(np.float32))
+        Xi = (X - mean_X) / std_X
+        Ni = Xi.shape[0]
+
+        Xz[offset:offset+Ni] = Xi
+        offset += Ni
+
+    print(f"[RIDGE-SVD] Xz shape: {Xz.shape}  (T={T}, D={D})")
+
+    # 2) compute SVD of Xz
+    print("[RIDGE-SVD] Computing SVD...")
+    U, S, Vh = np.linalg.svd(Xz, full_matrices=False)
+    # Shapes:
+    #   U:  (T, D)
+    #   S:  (D,)
+    #   Vh: (D, D)
+
+    # Ridge shrinkage term
+    shrink = S / (S**2 + alpha)
+
+    # Precompute U^T for efficiency
+    Ut = U.T  # shape (D, T)
+
+    # Prepare output weight matrix
+    W = np.zeros((D, V), dtype=np.float32)
+
+    # 3) solve ridge in voxel chunks
+    print(f"[RIDGE-SVD] Solving ridge in chunks of {voxel_chunk} voxels...")
+
+    start_vox = 0
+    while start_vox < V:
+        end_vox = min(start_vox + voxel_chunk, V)
+        chunk_size = end_vox - start_vox
+
+        print(f"[RIDGE-SVD] Processing voxels {start_vox}–{end_vox} ...")
+
+        # Build Yz chunk ------------------
+        Yz = np.zeros((T, chunk_size), dtype=np.float32)
+        offset = 0
+        for f in train_files:
+            with open(f, "rb") as fh:
+                d = pickle.load(fh)
+            Y = np.nan_to_num(d["bold"].astype(np.float32))
+            Yi = (Y - mean_Y) / std_Y
+
+            Ni = Yi.shape[0]
+            # Extract the voxel slice
+            Yz[offset:offset+Ni] = Yi[:, start_vox:end_vox]
+            offset += Ni
+
+        # Solve ridge for chunk ------------------
+        # UR = U^T Y
+        UR = Ut @ Yz  # shape (D, chunk_size)
+
+        # W_chunk = Vh.T * shrink[:,None] @ UR
+        W_chunk = (Vh.T * shrink[:, None]) @ UR
+
+        # Store into full W
+        W[:, start_vox:end_vox] = W_chunk.astype(np.float32)
+
+        start_vox = end_vox
+
+    print("[RIDGE-SVD] Done solving SVD-based ridge.")
+
+    return W
+
+
 
 def streaming_metrics(files, mean_X, std_X, mean_Y, std_Y, W, label="TRAIN"):
     """
@@ -362,6 +472,16 @@ def cross_validate_alpha(train_files, alphas, K=5, seed=123):
 
             # Solve ridge
             W = solve_ridge(XtX, XtY, alpha)
+            # W = solve_ridge_svd_chunked(
+            #                             train_files=train_files,
+            #                             mean_X=mean_X,
+            #                             std_X=std_X,
+            #                             mean_Y=mean_Y,
+            #                             std_Y=std_Y,
+            #                             alpha=alpha,
+            #                             voxel_chunk=1000,   # tune this depending on RAM
+            #                     )
+
 
             # Validation metrics
             val_mse, _ = streaming_metrics(val_files, mean_X, std_X, mean_Y, std_Y, W)
@@ -424,17 +544,28 @@ def run_streaming_exact_ridge_for_subject(
     mean_X, std_X, mean_Y, std_Y, _ = compute_train_stats(train_files)
     XtX, XtY = accumulate_xtx_xty(train_files, mean_X, std_X, mean_Y, std_Y)
     W = solve_ridge(XtX, XtY, best_alpha)
+    # W = solve_ridge_svd_chunked(
+    #                                 train_files=train_files,
+    #                                 mean_X=mean_X,
+    #                                 std_X=std_X,
+    #                                 mean_Y=mean_Y,
+    #                                 std_Y=std_Y,
+    #                                 alpha=best_alpha,
+    #                                 voxel_chunk=1000,   # tune this depending on RAM
+    #                         )
+
+
 
     metrics = {"cv_results": cv_results, "best_alpha": best_alpha}
 
-    # TRAIN metrics
+    # Train metrics
     if compute_train_metrics:
         train_mse, train_corr = streaming_metrics(train_files, mean_X, std_X, mean_Y, std_Y, W)
         metrics["train_mse"] = train_mse
         metrics["train_corr"] = train_corr
         metrics["mean_train_corr"] = float(np.mean(train_corr))
 
-    # TEST metrics
+    # Test metrics
     test_mse, test_corr = streaming_metrics(
         test_files, mean_X, std_X, mean_Y, std_Y, W, label="TEST"
     )
@@ -444,7 +575,7 @@ def run_streaming_exact_ridge_for_subject(
 
     # Save weights & metadata
     if save_weights:
-        out_path = Path(f"/ocean/projects/mth250011p/smazioud/ridge/subject{subject_id}_ridge_streaming_80_20_k_3.pkl")
+        out_path = Path(f"/ocean/projects/mth250011p/smazioud/ridge_new/subject{subject_id}ridge_streaming_80_20_k_3.pkl")
         out_path.parent.mkdir(parents=True, exist_ok=True)
         with open(out_path, "wb") as f:
             pickle.dump({
