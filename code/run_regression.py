@@ -2,7 +2,7 @@ from pathlib import Path
 import numpy as np
 from regression_utils import run_streaming_exact_ridge_for_subject
 
-EMB_DIR=Path("/ocean/projects/mth250011p/smazioud/preprocessing/")
+EMB_DIR=Path("/ocean/projects/mth250011p/smazioud/preprocessing_no_clean/")
 
 for subject_id in [3]:
     SUBJECT_ID = subject_id 

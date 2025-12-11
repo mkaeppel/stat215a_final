@@ -575,7 +575,7 @@ def run_streaming_exact_ridge_for_subject(
 
     # Save weights & metadata
     if save_weights:
-        out_path = Path(f"/ocean/projects/mth250011p/smazioud/ridge_new/subject{subject_id}ridge_streaming_80_20_k_3.pkl")
+        out_path = Path(f"/ocean/projects/mth250011p/smazioud/ridge_no_clean/subject{subject_id}ridge_streaming_80_20_k_3.pkl")
         out_path.parent.mkdir(parents=True, exist_ok=True)
         with open(out_path, "wb") as f:
             pickle.dump({
