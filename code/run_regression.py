@@ -4,7 +4,7 @@ from regression_utils import run_streaming_exact_ridge_for_subject
 
 EMB_DIR=Path("/ocean/projects/mth250011p/smazioud/preprocessing_no_clean/")
 
-for subject_id in [3]:
+for subject_id in [2,3]:
     SUBJECT_ID = subject_id 
     TRAIN_RATIO = 0.8
     ALPHAS = np.logspace(1, 5, 20)
