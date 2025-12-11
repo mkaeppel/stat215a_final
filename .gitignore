@@ -1,0 +1,6 @@
+embeddings/
+results/
+logs/
+ridge_new/
+saved_models/
+__pycache__/
