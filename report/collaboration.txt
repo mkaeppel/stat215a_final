@@ -1,21 +1,25 @@
 We have all agreed on these attributions:
 
-Melchior Kaeppel worked on:
--
--
--
+SoungEil Houng worked on:
+- Writing Introduction
+- Data Cleaning (Code and Write-up)
+- EDA on raw data (Code and Write-up)
+- Word2Vec embeddings (Code and write-up)
+- Detailed CC analysis
 
 Selma Mazioud worked on:
--
--
--
+- Finetuned BERT (code and write-up), including the runs for stability 
+- Ridge regression (code and write-up), including runs for stability 
+- Model cross-validation (code and write up)
+- Editing of the write-up 
 
-SoungEil Houng worked on:
--
--
--
+Melchior Kaeppel worked on:
+- Glove (code and write-up)
+- Stability Analysis (code and write-up)
+- Miscellaneous (code cleaning, Data section writing)
 
 Yichen Pan worked on:
--
-- 
--
+- Pretrained BERT  (code and write-up), including tsne visualizations
+- Data preprocessing (code and write-up)
+- Interpretation (code and write-up)
+
