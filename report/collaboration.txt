@@ -1,11 +1,11 @@
 We have all agreed on these attributions:
 
 SoungEil Houng worked on:
-- Writing Introduction
-- Data Cleaning (Code and Write-up)
-- EDA on raw data (Code and Write-up)
+- Data Cleaning and EDA on raw data (code and write-up)
 - Word2Vec embeddings (Code and write-up)
-- Detailed CC analysis
+- Detailed CC analysis (Code and write-up)
+- Writings on Introduction, Embedding comparison, and Conclusion
+
 
 Selma Mazioud worked on:
 - Finetuned BERT (code and write-up), including the runs for stability 
